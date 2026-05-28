@@ -19,3 +19,7 @@ Kaggle setup:
 - Run the default dry-run first.
 - Set `RUN_FULL = True` in Cell 12 only after dry-run succeeds.
 - Keep `RUN_STAGE1_OPTIONAL = False` unless intentionally running optional Wikipedia Stage 1.
+
+##Link to...
+- Checkpoint of teacher "phobert-vsfc models" : https://drive.google.com/drive/folders/1Y7WaX44iyYyslC9OvLEabc7Tf1Mak0WO?usp=sharing
+- wiki_dataset: https://drive.google.com/drive/folders/18BoI313y_r-ResTl6vD5MN_UerGEXPKI?usp=sharing
