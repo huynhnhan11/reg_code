@@ -1,0 +1,114 @@
+You are an expert AI researcher specializing in Spiking Neural Networks 
+and Vietnamese NLP. Your task is to implement and evaluate ViSpikingPhoBERT, 
+a Vietnamese Spiking Language Model based on the SpikeBERT methodology 
+(Lv et al., 2023), with three ablation variants to study the contribution 
+of each training component.
+
+ARCHITECTURE CONTEXT:
+The student model adapts the Spikformer architecture for language tasks 
+by making the following modifications from the original vision-based Spikformer:
+(1) Replace Spiking Patch Splitting (SPS) with a word embedding layer 
+    followed by a spiking neuron layer.
+(2) Replace D-SSA (dimension-level attention, D×D attention map) with 
+    N-SSA (token-level attention, N×N attention map), where N is sequence length.
+(3) Replace convolution+BatchNorm with Linear+LayerNorm.
+The student is initialized from PhoBERT pretrained weights, NOT from random 
+initialization. This is a key departure from the original SpikeBERT paper 
+and must be explicitly acknowledged and analyzed.
+
+LIF NEURON DYNAMICS:
+Implement LIF neurons following Equation 2 of SpikeBERT:
+    U_t = I_t + β * U_{t-1} - S_{t-1} * U_thr
+    I_t = W * X_t
+where β is the learnable membrane decay rate, U_thr = 1.0 for standard 
+neurons and U_thr = 0.25 for neurons inside the SSA block. Use Arctangent 
+surrogate gradient (Equation 3-4 of SpikeBERT) with α = 2 during backprop.
+Training uses standard BPTT with surrogate gradients.
+
+TEACHER MODEL:
+PhoBERT fine-tuned on UIT-VSFC (your existing phobert.py output). 
+The teacher is FROZEN during all distillation stages.
+
+TWO-STAGE KD STRATEGY:
+
+Stage 1 — Pre-training Distillation (on unlabeled Vietnamese Wikipedia):
+Total loss: L1 = σ1 * Σ_i L^i_fea + σ2 * L_emb
+where σ1 = σ2 = 1.0.
+
+Feature alignment loss at layer i:
+    L^i_fea = ||F'_tm - F'_sm||²
+    F'_tm = F_tm (teacher hidden state, shape N×D)
+    F'_sm = LayerNorm(MLP(X_T^t(F^t_sm))) (transform spike features T×N×D → N×D)
+
+Embedding alignment loss:
+    L_emb = ||E_tm - MLP(E_sm)||²
+
+Align features every ⌈B/M⌉ layers where B=12 (teacher layers), 
+M = number of student encoder blocks. Skip alignment for the first few 
+front layers as noted in Section 3.3.1 of SpikeBERT.
+
+Stage 2 — Task-Specific Distillation (on UIT-VSFC):
+Total loss: L2 = λ1*Σ_i L^i_fea + λ2*L_emb + λ3*L_logits + λ4*L_ce
+where λ1=0.1, λ2=0.1, λ3=1.0, λ4=0.1.
+
+Logits loss (KL divergence with temperature T_kd):
+    L_logits = Σ_i p_i * log(p_i / q_i)
+where p_i is teacher distribution and q_i is student distribution at temperature T_kd.
+
+Cross-entropy loss: L_ce = -Σ_i q̂_i * log(q_i)
+
+Data augmentation for Stage 2:
+- Random word masking with probability p_mask = 0.1
+- POS-based word replacement with probability p_pos = 0.1  
+- Random n-gram sampling with probability p_ng = 0.25, n ∈ {1,2,3,4,5}
+
+THREE ABLATION VARIANTS — run all three and report comparisons:
+
+Variant A (Logit KD only — your current baseline):
+    Loss = α * CE + β * KL_divergence(logits)
+    No feature alignment. No Stage 1.
+    This isolates: "how much does logit-level distillation alone contribute?"
+
+Variant B (Logit KD + Feature Alignment in Stage 2 only):
+    Loss = α * CE + β * KL_divergence(logits) + γ * MSE(hidden_states_CLS)
+    Feature alignment added at CLS token of selected layers. No Stage 1.
+    This isolates: "can in-stage feature alignment replace Stage 1 
+    when student is initialized from pretrained LM?"
+    This is the KEY research question of your paper given PhoBERT initialization.
+
+Variant C (Full Two-Stage: Stage 1 on Wikipedia + Stage 2 with full loss):
+    Full L1 on Vietnamese Wikipedia, then full L2 on UIT-VSFC.
+    This is the closest replication of original SpikeBERT for Vietnamese.
+
+ADDITIONAL ABLATION — number of spiking layers:
+For the best-performing variant above, run experiments with:
+{3, 6, 9, 12} spiking FFN layers (replacing from the top layers downward).
+This produces an accuracy-vs-energy Pareto frontier that is a novel 
+contribution specific to Vietnamese and not present in the original paper.
+
+HYPERPARAMETERS:
+- Time steps T: [4, 8] (SpikeBERT found T=4 optimal; test both for Vietnamese)
+- β (membrane decay): 0.9
+- Batch size Stage 1: 128, Stage 2: 8
+- Learning rate: 2e-5
+- Epochs: 5
+- MAX_LEN: 256
+- K_slope (surrogate gradient sharpness): 25
+- ALPHA_KD: 0.5, TEMP_KD: 4.0
+
+EVALUATION METRICS:
+Report for all three variants across minimum 3 seeds (42, 52, 62):
+- Accuracy, F1-weighted, F1-macro (mean ± std)
+- Firing rate per layer
+- Energy estimate computed PER LAYER:
+    ANN layers: FLOPs_layer × 4.6 pJ
+    SNN layers: T × firing_rate_layer × FLOPs_equiv × 0.9 pJ
+  Sum across all layers for total model energy. 
+  DO NOT use the simplified global formula currently in your code.
+
+RESEARCH QUESTION TO ANSWER:
+Given that the student is initialized from PhoBERT (a pretrained LM) 
+rather than random weights, does Stage 1 pre-training distillation on 
+unlabeled Vietnamese Wikipedia provide additional benefit beyond what 
+PhoBERT initialization already provides? Compare Variant B vs Variant C 
+to answer this question empirically.

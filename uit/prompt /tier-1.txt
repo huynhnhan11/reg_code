@@ -1,0 +1,81 @@
+You are an expert AI researcher specializing in Spiking Neural Networks (SNNs) 
+and Natural Language Processing. Your task is to implement and evaluate a 
+Vietnamese Spiking Language Model based on the SpikingBERT methodology 
+(Bal & Sengupta, 2023).
+
+ARCHITECTURE CONTEXT:
+The student model is a Spiking Language Model (SLM) that follows the BERT 
+encoder architecture but replaces standard neurons with Leaky Integrate-and-Fire 
+(LIF) neurons. The model is treated as a dynamical system that converges to a 
+steady-state equilibrium over T_conv time steps. All intra- and inter-layer 
+communication occurs via binary spikes {0, 1}.
+
+The core insight is: instead of unrolling gradients through time (BPTT), 
+we train using Implicit Differentiation at the equilibrium state. Once the 
+Average Spiking Rate (ASR) of neurons converges to a* after T_conv steps, 
+we compute gradients using the fixed-point equation:
+
+    dL(z*)/dθ = -[dL(z*)/dz*] * [J_gθ^{-1} at z*] * [df_θ(z*)/dθ]
+
+This avoids surrogate gradient approximations entirely.
+
+TEACHER MODEL:
+Use the fine-tuned PhoBERT model (already trained on UIT-VSFC Vietnamese 
+sentiment dataset) as the teacher. PhoBERT serves as the "teacher" ANN 
+whose knowledge is distilled into the spiking student via an ANN-SNN 
+Knowledge Distillation framework using equilibrium states.
+
+KNOWLEDGE DISTILLATION FRAMEWORK:
+Stage 1 — General Distillation: Use unlabeled Vietnamese Wikipedia corpus 
+to perform transformer-layer distillation. The loss at each spiking encoder 
+layer i is:
+    L_hi = MSE(a*_hi * W_Td, T_f(hi))
+where a*_hi is the ASR at equilibrium of the i-th spiking encoder output,
+T_f(hi) is the output of the mapped teacher layer, and W_Td is a linear 
+transformation for dimension alignment. Map student layers to teacher layers 
+using f(h_i) = h'_{p*i} where p = T_enc / S_enc.
+
+Stage 2 — Task-Specific Distillation: Fine-tune on UIT-VSFC using 
+grouped task distillation. After transformer-layer KD, perform prediction-layer 
+distillation using:
+    L_pred = CE(c(a*_pred) / t', T_pred / t')
+where t' is temperature, c is a linear mapping, and T_pred is teacher logits.
+
+SPIKING ATTENTION MECHANISM:
+Implement the spiking attention as defined in Equation 9 of SpikingBERT:
+    Attn(Sx(t), SK(t), SV(t)) = π(s * Q(Sx(t)) * SK(t)^T) * SV(t)
+This reduces computation from O(n³) MAC operations to O(n³) AC operations, 
+which is the primary energy efficiency gain.
+
+CONVERGENCE REQUIREMENT:
+Before computing any gradient, verify that ASR has converged by checking 
+that the difference norm between consecutive time steps falls below a 
+threshold ε = 1e-3. Report T_conv per layer as part of the experimental 
+results.
+
+HYPERPARAMETERS TO SEARCH:
+- T_conv: [40, 80, 120] for both general KD and task-based KD
+- V_th (threshold voltage): [0.25, 0.5, 1.0, 2.0]
+- γ (leak term): [0.99 for LIF, 1.0 for IF]
+- Temperature t': [1.0, 2.0, 4.0]
+- Batch size: [16, 32] for task-based KD
+- Epochs: 5 for general KD, 20 for task-based KD
+
+EVALUATION METRICS:
+Report Accuracy, F1-weighted, F1-macro on UIT-VSFC test set across minimum 
+3 random seeds. Report mean ± std. Also report: average ASR per layer, 
+energy efficiency factor e = (1/5.1 * Norm#OPS)^{-1}, and T_conv required 
+for convergence.
+
+DATASET:
+- Stage 1: Vietnamese Wikipedia (wikimedia/wikipedia, 20231101.vi)
+- Stage 2: UIT-VSFC Vietnamese Sentiment Analysis dataset
+
+IMPORTANT CONSTRAINTS:
+1. Do NOT use surrogate gradients anywhere in the backward pass.
+2. Gradients must be computed only at the equilibrium state using 
+   implicit differentiation (Equation 3 of SpikingBERT).
+3. Store only the equilibrium state, not intermediate hidden states, 
+   to maintain memory efficiency advantage over BPTT.
+4. Energy must be estimated per-layer using normalized OPS formula, 
+   not as a global approximation.

@@ -1,0 +1,113 @@
+You are an expert AI researcher working on a novel hybrid training framework 
+for Vietnamese Spiking Language Models. Your task is to design, implement, 
+and evaluate a method that combines the Two-Stage Knowledge Distillation 
+strategy from SpikeBERT (Lv et al., 2023) with the Implicit Differentiation 
+training mechanism from SpikingBERT (Bal & Sengupta, 2023). This combination 
+has not been proposed or evaluated in either paper and constitutes the 
+primary novel contribution of your work.
+
+MOTIVATION FOR COMBINATION:
+SpikeBERT's two-stage KD provides a principled curriculum for transferring 
+knowledge from a pretrained ANN teacher to an SNN student, but it relies 
+on BPTT with surrogate gradients — an approximation that accumulates errors 
+over time steps and requires careful tuning of the surrogate function.
+SpikingBERT's implicit differentiation eliminates surrogate gradient 
+approximation entirely by computing exact gradients at equilibrium, but 
+its original KD framework is simpler (single-stage, no feature alignment 
+across intermediate layers as systematically as SpikeBERT).
+The hypothesis of Hướng 3 is: combining SpikeBERT's structured two-stage 
+KD curriculum with SpikingBERT's equilibrium-based gradient computation 
+will achieve better accuracy-energy tradeoff than either method alone, 
+because the curriculum provides better training signal while exact gradients 
+reduce training noise.
+
+ARCHITECTURE:
+Use the SpikeBERT-style Spikformer adapted for Vietnamese (N-SSA, 
+Linear+LayerNorm, word embedding layer), initialized from PhoBERT weights.
+However, REPLACE the BPTT+surrogate gradient training with Implicit 
+Differentiation at equilibrium as defined in SpikingBERT.
+
+The model is run for T_conv time steps until ASR converges, after which:
+    dL(z*)/dθ = -[dL(z*)/dz*] * [J_gθ^{-1} at z*] * [df_θ(z*)/dθ]
+
+CRITICAL DESIGN DECISION — how to reconcile the two frameworks:
+SpikeBERT's feature alignment loss L_fea operates on intermediate spike 
+features F^t_sm of shape T×N×D, requiring features at each time step.
+SpikingBERT's implicit differentiation only stores the equilibrium state z*, 
+NOT intermediate hidden states.
+
+Resolution: Compute feature alignment loss using the EQUILIBRIUM ASR a*_i 
+at each layer instead of time-averaged spike features. Specifically:
+    L^i_fea = ||F'_tm - transform(a*_i)||²
+where transform maps ASR (shape N×D, values in [0,1]) to teacher hidden 
+state space via a learned linear projection. This is analogous to how 
+SpikingBERT uses ASR for its KD loss (Equation 10), but applied to 
+SpikeBERT's multi-layer alignment structure.
+
+TWO-STAGE STRUCTURE (adapted):
+
+Stage 1 — Pre-training Distillation on Vietnamese Wikipedia:
+Loss: L1 = σ1 * Σ_i ||F'_tm - W_i * a*_i||² + σ2 * ||E_tm - W_emb * a*_0||²
+Gradient computation: Implicit differentiation at equilibrium.
+No BPTT. No surrogate gradients.
+
+Stage 2 — Task-Specific Distillation on UIT-VSFC:
+Loss: L2 = λ1 * L_fea(ASR) + λ2 * L_emb(ASR) + λ3 * L_logits + λ4 * L_ce
+Prediction layer: L_logits = CE(c(a*_pred)/t', T_pred/t') as in SpikingBERT.
+Cross-entropy: L_ce uses hard labels from UIT-VSFC.
+Data augmentation: same as SpikeBERT Stage 2 (masking, POS replacement, n-gram).
+
+CONVERGENCE MONITORING:
+At each training step, verify equilibrium convergence before computing 
+gradients. Log T_conv per layer per training step to understand whether 
+the KD loss affects convergence speed. This is a novel diagnostic that 
+neither paper reports.
+
+COMPARISON MATRIX:
+Your experiments should fill the following comparison table:
+
+Method               | Acc | F1-macro | Energy | T_conv | Surrogate?
+Variant A (Hướng 2) | ... | ...      | ...    | N/A    | Yes (BPTT)
+Variant B (Hướng 2) | ... | ...      | ...    | N/A    | Yes (BPTT)  
+Variant C (Hướng 2) | ... | ...      | ...    | N/A    | Yes (BPTT)
+Hướng 1 (SpikingBERT)| ... | ...     | ...    | T_conv | No (ImplDiff)
+Hướng 3 (Hybrid)    | ... | ...      | ...    | T_conv | No (ImplDiff)
+
+This table is the core empirical contribution of your paper.
+
+ABLATION WITHIN HƯỚNG 3:
+Run two sub-variants to isolate what drives performance in the hybrid:
+Sub-variant 3a: Two-stage KD structure + Implicit Differentiation 
+               + NO feature alignment (only logits + CE in Stage 2)
+Sub-variant 3b: Full Hướng 3 as described above (with feature alignment via ASR)
+Comparing 3a vs 3b shows whether feature alignment via equilibrium ASR 
+provides additional benefit beyond logit-level distillation.
+
+ENERGY CALCULATION:
+Since the model uses implicit differentiation (no BPTT), memory usage 
+during training is significantly lower. Report both:
+(1) Inference energy (same formula as Hướng 1 and 2, per-layer)
+(2) Training memory (peak GPU memory) as a practical efficiency metric — 
+    this is where Hướng 3 should show the clearest advantage over BPTT methods.
+
+EXPECTED OUTCOMES AND FAILURE MODES TO WATCH FOR:
+The hybrid may be harder to train because SpikeBERT's feature alignment 
+loss assumes time-varying spike features while implicit differentiation 
+only produces equilibrium ASR. If the transform(a*_i) fails to capture 
+enough information for effective alignment, Hướng 3 may underperform 
+Variant C of Hướng 2. This is a valid and publishable negative result 
+— document it carefully if it occurs.
+Conversely, if Hướng 3 achieves comparable accuracy to Variant C while 
+using less training memory and no surrogate gradient approximation, 
+this is a strong positive result that directly motivates future work on 
+neuromorphic hardware deployment.
+
+HYPERPARAMETERS:
+- T_conv: start with 80 (SpikingBERT optimal), ablate [40, 80, 120]
+- V_th: 1.0 for standard layers, 0.25 for SSA block
+- γ: 0.99 (LIF)
+- Temperature t': 4.0 (SpikeBERT default for KD)
+- Learning rate: 2e-5
+- Batch size Stage 1: 64, Stage 2: 8
+- Epochs Stage 1: 3, Stage 2: 5
+- Seeds: 42, 52, 62 (report mean ± std)

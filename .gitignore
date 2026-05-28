@@ -1,0 +1,9 @@
+# Model checkpoints
+*.pth
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+uit/uit-models/
+uit/cache/
+hf_cache/
